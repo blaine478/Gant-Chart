@@ -10,17 +10,20 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
     <style>
-        body { padding: 20px; }
-        .set-card { margin-bottom: 20px; }
-        #chart-container, #resource-chart-container { margin-top: 20px; overflow-x: auto; }
-        #analysis { margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #f8f9fa; }
-        #gantt-table th, #gantt-table td { text-align: center; vertical-align: middle; padding: 5px; border: 1px solid #ccc; }
-        #gantt-table .month-header { background-color: #f0f0f0; font-weight: bold; }
-        #gantt-table .day-header { background-color: #e0e0e0; }
-        #gantt-table .set-cell { color: white; font-weight: bold; }
+        body { padding: 20px; background-color: #f8f9fa; }
+        .set-card { margin-bottom: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        #chart-container, #resource-chart-container, #gantt-bar-container { margin-top: 30px; overflow-x: auto; padding: 20px; background: white; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        #analysis { margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #ffffff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        #gantt-table th, #gantt-table td { text-align: center; vertical-align: middle; padding: 8px; border: 1px solid #dee2e6; }
+        #gantt-table .month-header { background-color: #e9ecef; font-weight: bold; }
+        #gantt-table .day-header { background-color: #dee2e6; }
+        #gantt-table .set-cell { color: white; font-weight: bold; border-radius: 4px; }
         #gantt-table .total-row { font-weight: bold; background-color: #f8f9fa; }
-        #gantt-table .over-crew { background-color: #ffcccc; color: red; }
-        #gantt-table tr:nth-child(even) { background-color: #f9f9f9; }
+        #gantt-table .over-crew { background-color: #ffcccc; color: red; font-weight: bold; }
+        #gantt-table tr:nth-child(even) { background-color: #f9f9fa; }
+        h4 { color: #343a40; margin-bottom: 15px; }
+        button { transition: background-color 0.3s; }
+        button:hover { opacity: 0.9; }
     </style>
 </head>
 <body>
@@ -45,14 +48,19 @@
         
         <div id="analysis"></div>
         
-        <h4>Gantt Chart (Table View)</h4>
-        <div id="chart-container">
-            <table id="gantt-table" class="table table-bordered table-sm"></table>
+        <h4>Gantt Schedule Chart (Bar View)</h4>
+        <div id="gantt-bar-container">
+            <canvas id="gantt-chart"></canvas>
         </div>
         
-        <h4>Resource Allocation Chart (Bar View)</h4>
+        <h4>Resource Allocation Chart (Stacked Bar View)</h4>
         <div id="resource-chart-container">
             <canvas id="resource-chart"></canvas>
+        </div>
+        
+        <h4>Detailed Gantt Table (with People per Day)</h4>
+        <div id="chart-container">
+            <table id="gantt-table" class="table table-bordered table-sm"></table>
         </div>
         
         <button class="btn btn-secondary mt-3" onclick="exportToPDF()">Export to PDF</button>
@@ -62,6 +70,7 @@
         let crewSize = 0;
         let setCounter = 0;
         let resourceChart = null;
+        let ganttChart = null;
 
         function addSet() {
             setCounter++;
@@ -188,8 +197,8 @@
                 }
 
                 sets.push({ name, start, end, budget, startStr, endStr });
-                minDate = new Date(Math.min(minDate, start));
-                maxDate = new Date(Math.max(maxDate, end));
+                minDate = Math.min(minDate, start);
+                maxDate = Math.max(maxDate, end);
             });
 
             if (sets.length === 0) {
@@ -279,7 +288,7 @@
                     if (req > 0) zeroAllocation = false;
                 });
 
-                setEfforts.push({ name: s.name, efforts: setEffort, color: colors[setIdx % colors.length] });
+                setEfforts.push({ name: s.name, efforts: setEffort, color: colors[setIdx % colors.length], start: s.start, end: s.end });
                 allWarnings.push(...setWarnings);
             });
 
@@ -307,7 +316,93 @@
             }
             document.getElementById('analysis').innerHTML = analysisText;
 
-            // Table Gantt
+            // Gantt Bar Chart (Schedule View)
+            const ganttCtx = document.getElementById('gantt-chart').getContext('2d');
+            if (ganttChart) ganttChart.destroy();
+            ganttChart = new Chart(ganttCtx, {
+                type: 'bar',
+                data: {
+                    datasets: setEfforts.map((se, i) => ({
+                        label: se.name,
+                        data: [{ y: se.name, x: [new Date(se.start), new Date(se.end)] }],
+                        backgroundColor: se.color
+                    }))
+                },
+                options: {
+                    indexAxis: 'y',
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: { unit: 'day' },
+                            title: { display: true, text: 'Timeline' },
+                            min: minDate,
+                            max: maxDate
+                        },
+                        y: {
+                            title: { display: true, text: 'Sets' }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => {
+                                    const se = setEfforts[context.datasetIndex];
+                                    const avgPeople = (se.efforts.reduce((a, b) => a + b, 0) / se.efforts.filter(p => p > 0).length) || 0;
+                                    return `${context.dataset.label}: From ${se.startStr} to ${se.endStr}, Avg People: ${avgPeople.toFixed(2)}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Resource Allocation Stacked Bar
+            const resourceCtx = document.getElementById('resource-chart').getContext('2d');
+            if (resourceChart) resourceChart.destroy();
+            resourceChart = new Chart(resourceCtx, {
+                type: 'bar',
+                data: {
+                    labels: allDays,
+                    datasets: setEfforts.map((se, i) => ({
+                        label: se.name,
+                        data: se.efforts,
+                        backgroundColor: se.color,
+                        stack: 'people'
+                    })).concat([{
+                        type: 'line',
+                        label: 'Available Crew',
+                        data: new Array(allDays.length).fill(crewSize),
+                        borderColor: 'green',
+                        borderDash: [5, 5],
+                        fill: false
+                    }])
+                },
+                options: {
+                    scales: {
+                        x: {
+                            stacked: true,
+                            grid: { lineWidth: 2, color: '#ddd' },
+                            title: { display: true, text: 'Dates' }
+                        },
+                        y: {
+                            stacked: true,
+                            beginAtZero: true,
+                            title: { display: true, text: 'People' }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: true },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => `${context.dataset.label}: ${Math.ceil(context.raw)} people`
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Detailed Table Gantt
             const table = document.getElementById('gantt-table');
             table.innerHTML = '';
 
@@ -355,9 +450,6 @@
                         td.style.backgroundColor = se.color;
                         td.className = 'set-cell';
                         td.textContent = Math.ceil(people);
-                    } else if (people > 0.1) { // Show small allocations as 1 if >0.1
-                        td.style.backgroundColor = se.color + '80'; // Semi-transparent for small
-                        td.textContent = 1;
                     }
                     tr.appendChild(td);
                 });
@@ -380,71 +472,28 @@
                 totalTr.appendChild(td);
             });
             table.appendChild(totalTr);
-
-            // Resource Chart (Blended with Chart.js for bar view)
-            const resourceCtx = document.getElementById('resource-chart').getContext('2d');
-            if (resourceChart) resourceChart.destroy();
-            resourceChart = new Chart(resourceCtx, {
-                type: 'bar',
-                data: {
-                    labels: allDays,
-                    datasets: setEfforts.map((se, i) => ({
-                        label: se.name,
-                        data: se.efforts,
-                        backgroundColor: se.color,
-                        stack: 'people'
-                    })).concat([{
-                        type: 'line',
-                        label: 'Available Crew',
-                        data: new Array(allDays.length).fill(crewSize),
-                        borderColor: 'green',
-                        borderDash: [5, 5],
-                        fill: false
-                    }])
-                },
-                options: {
-                    scales: {
-                        x: {
-                            stacked: true,
-                            grid: { lineWidth: 2, color: '#ddd' }
-                        },
-                        y: {
-                            stacked: true,
-                            beginAtZero: true,
-                            title: { display: true, text: 'People' }
-                        }
-                    },
-                    plugins: {
-                        legend: { display: true },
-                        tooltip: {
-                            callbacks: {
-                                label: (context) => `${context.dataset.label}: ${Math.ceil(context.raw)} people`
-                            }
-                        }
-                    }
-                }
-            });
         }
 
         function exportToPDF() {
             const { jsPDF } = window.jspdf;
             const pdf = new jsPDF({ orientation: 'landscape' });
             const analysis = document.getElementById('analysis');
-            const chartContainer = document.getElementById('chart-container');
+            const ganttBarContainer = document.getElementById('gantt-bar-container');
             const resourceContainer = document.getElementById('resource-chart-container');
+            const chartContainer = document.getElementById('chart-container');
 
             html2canvas(analysis).then(canvas => {
-                const imgData = canvas.toDataURL('image/png');
-                pdf.addImage(imgData, 'PNG', 10, 10, 180, 30);
-                return html2canvas(chartContainer);
+                pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 10, 180, 30);
+                return html2canvas(ganttBarContainer);
             }).then(canvas => {
-                const imgData = canvas.toDataURL('image/png');
-                pdf.addImage(imgData, 'PNG', 10, 50, 260, 60);
-                pdf.addPage();
+                pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 50, 260, 60);
                 return html2canvas(resourceContainer);
             }).then(canvas => {
-                const imgData = canvas.toDataURL('image/png');
-                pdf.addImage(imgData, 'PNG', 10, 10, 260, 100);
+                pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 120, 260, 60);
+                pdf.addPage();
+                return html2canvas(chartContainer);
+            }).then(canvas => {
+                pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 10, 260, 120);
                 pdf.save('sets_gantt.pdf');
             });
         }
