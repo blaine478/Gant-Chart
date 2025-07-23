@@ -15,16 +15,29 @@
         .low { background-color: #ADD8E6; } /* Light Blue <=10 crew */
         .medium { background-color: #FFDAB9; } /* Orange 11-15 */
         .high { background-color: #FF6347; } /* Red >15 */
+        .over { background-color: #ffcccc; } /* Over-allocated crew */
         #chart-container { overflow-x: auto; }
     </style>
 </head>
 <body>
     <h1>Movie Set Construction Gantt Chart Generator</h1>
-    <p>Upload a CSV (optional: columns 'Set', 'Crew', 'Budget') or input manually. Dates start from today's date if not specified.</p>
+    <p>Upload a CSV (optional: columns 'Set', 'Crew', 'Budget') or input manually. Dates start from July 23, 2025 if not specified.</p>
 
     <form id="gantt-form">
         <label for="csv-upload">Upload Crew CSV (optional):</label>
         <input type="file" id="csv-upload" accept=".csv"><br><br>
+
+        <label for="base-rate">Base Hourly Rate per Crew Member:</label>
+        <input type="number" id="base-rate" min="0" step="0.01" value="20"><br>
+
+        <label for="total-crew">Total Available Crew:</label>
+        <input type="number" id="total-crew" min="0" value="50"><br>
+
+        <label for="sat-hours">Saturday Hours (0 for no work):</label>
+        <input type="number" id="sat-hours" min="0" step="0.5" value="0"><br>
+
+        <label for="sun-hours">Sunday Hours (0 for no work):</label>
+        <input type="number" id="sun-hours" min="0" step="0.5" value="0"><br><br>
 
         <label for="num-sets">Number of sets:</label>
         <input type="number" id="num-sets" min="1" max="20" value="1">
@@ -49,9 +62,9 @@
                     <label>Set Name ${i+1}:</label>
                     <input type="text" id="set-name-${i}" value="Set ${i+1}"><br>
                     <label>Start Date ${i+1}:</label>
-                    <input type="date" id="start-date-${i}" value="${new Date().toISOString().split('T')[0]}"><br>
+                    <input type="date" id="start-date-${i}" value="2025-07-25"><br>
                     <label>End Date ${i+1}:</label>
-                    <input type="date" id="end-date-${i}" value="${new Date(Date.now() + 5*24*60*60*1000).toISOString().split('T')[0]}"><br>
+                    <input type="date" id="end-date-${i}" value="2025-07-30"><br>
                     <label>Crew Count ${i+1}:</label>
                     <input type="number" id="crew-${i}" min="1" value="10"><br>
                     <label>Budget ${i+1}:</label>
@@ -66,6 +79,10 @@
 
         function generateChart() {
             const numSets = parseInt(document.getElementById('num-sets').value);
+            const baseRate = parseFloat(document.getElementById('base-rate').value);
+            const totalCrewAvail = parseInt(document.getElementById('total-crew').value);
+            const satHours = parseFloat(document.getElementById('sat-hours').value);
+            const sunHours = parseFloat(document.getElementById('sun-hours').value);
             let setsData = [];
 
             // Collect manual inputs
@@ -77,8 +94,6 @@
                     Crew: parseInt(document.getElementById(`crew-${i}`).value),
                     Budget: parseFloat(document.getElementById(`budget-${i}`).value)
                 };
-                set.Duration = Math.ceil((set.End - set.Start) / (1000 * 60 * 60 * 24)) + 1;
-                set.DailyBudget = set.Budget / set.Duration;
                 setsData.push(set);
             }
 
@@ -89,27 +104,24 @@
                     header: true,
                     complete: function(results) {
                         const csvData = results.data;
-                        // Merge CSV into setsData by Set name
                         csvData.forEach(csvRow => {
                             const matchingSet = setsData.find(s => s.Set === csvRow.Set);
                             if (matchingSet) {
                                 if (csvRow.Crew) matchingSet.Crew = parseInt(csvRow.Crew);
                                 if (csvRow.Budget) matchingSet.Budget = parseFloat(csvRow.Budget);
-                                matchingSet.Duration = Math.ceil((matchingSet.End - matchingSet.Start) / (1000 * 60 * 60 * 24)) + 1;
-                                matchingSet.DailyBudget = matchingSet.Budget / matchingSet.Duration;
                             }
                         });
-                        buildTable(setsData);
+                        processSets(setsData, baseRate, totalCrewAvail, satHours, sunHours);
                     }
                 });
             } else {
-                buildTable(setsData);
+                processSets(setsData, baseRate, totalCrewAvail, satHours, sunHours);
             }
         }
 
-        function buildTable(setsData) {
+        function processSets(setsData, baseRate, totalCrewAvail, satHours, sunHours) {
             // Calculate timeline
-            const currentDate = new Date(); // Or set to new Date(2025, 6, 23); for July 23, 2025
+            const currentDate = new Date(2025, 6, 23); // July 23, 2025
             const minDate = new Date(Math.min(...setsData.map(s => s.Start)));
             const maxDate = new Date(Math.max(...setsData.map(s => s.End)));
             const totalDays = Math.ceil((maxDate - currentDate) / (1000 * 60 * 60 * 24)) + 1;
@@ -118,7 +130,36 @@
                 dateRange.push(new Date(currentDate.getTime() + i * 24 * 60 * 60 * 1000));
             }
 
-            // Create table
+            // Functions
+            function isWorkDay(date) {
+                const dow = date.getDay();
+                return (dow >= 1 && dow <= 5) || (dow === 6 && satHours > 0) || (dow === 0 && sunHours > 0);
+            }
+
+            function getPersonCost(date) {
+                const dow = date.getDay();
+                if (dow === 0) {
+                    return sunHours * 2 * baseRate;
+                } else if (dow === 6) {
+                    return satHours * 1.5 * baseRate;
+                } else {
+                    return (8 + 3.5 * 1.5) * baseRate; // 13.25 * baseRate
+                }
+            }
+
+            // Precalculate work days and daily burn for each set
+            setsData.forEach(set => {
+                let workDaysCount = 0;
+                dateRange.forEach(date => {
+                    if (date >= set.Start && date <= set.End && isWorkDay(date)) {
+                        workDaysCount++;
+                    }
+                });
+                set.workDays = workDaysCount;
+                set.dailyBurn = set.workDays > 0 ? set.Budget / set.workDays : 0;
+            });
+
+            // Build table
             let table = '<table><thead><tr><th>Set</th><th>Crew</th><th>Budget</th>';
             dateRange.forEach(date => {
                 table += `<th>${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</th>`;
@@ -129,9 +170,9 @@
             setsData.forEach(set => {
                 table += `<tr><td>${set.Set}</td><td>${set.Crew}</td><td>$${set.Budget.toFixed(2)}</td>`;
                 dateRange.forEach(date => {
-                    if (date >= set.Start && date <= set.End) {
+                    if (date >= set.Start && date <= set.End && isWorkDay(date)) {
                         const className = set.Crew <= 10 ? 'low' : set.Crew <= 15 ? 'medium' : 'high';
-                        table += `<td class="${className}">$${set.DailyBudget.toFixed(2)}</td>`;
+                        table += `<td class="${className}">$${set.dailyBurn.toFixed(2)}</td>`;
                     } else {
                         table += '<td></td>';
                     }
@@ -142,8 +183,27 @@
             // Daily crew load
             table += '<tr><td colspan="3">Daily Crew Load</td>';
             dateRange.forEach(date => {
-                const dailyCrew = setsData.reduce((sum, set) => sum + (date >= set.Start && date <= set.End ? set.Crew : 0), 0);
-                table += `<td>${dailyCrew}</td>`;
+                const dailyCrew = setsData.reduce((sum, set) => sum + (date >= set.Start && date <= set.End && isWorkDay(date) ? set.Crew : 0), 0);
+                const overClass = dailyCrew > totalCrewAvail ? ' class="over"' : '';
+                table += `<td${overClass}>${dailyCrew}</td>`;
+            });
+            table += '</tr>';
+
+            // Daily labor cost
+            table += '<tr><td colspan="3">Daily Labor Cost</td>';
+            dateRange.forEach(date => {
+                const dailyLabor = setsData.reduce((sum, set) => sum + (date >= set.Start && date <= set.End && isWorkDay(date) ? set.Crew * getPersonCost(date) : 0), 0);
+                table += `<td>$${dailyLabor.toFixed(2)}</td>`;
+            });
+            table += '</tr>';
+
+            // Cumulative labor cost
+            table += '<tr><td colspan="3">Cumulative Labor Cost</td>';
+            let cumLabor = 0;
+            dateRange.forEach(date => {
+                const dailyLabor = setsData.reduce((sum, set) => sum + (date >= set.Start && date <= set.End && isWorkDay(date) ? set.Crew * getPersonCost(date) : 0), 0);
+                cumLabor += dailyLabor;
+                table += `<td>$${cumLabor.toFixed(2)}</td>`;
             });
             table += '</tr>';
 
@@ -151,7 +211,7 @@
             table += '<tr><td colspan="3">Cumulative Budget Burn</td>';
             let cumulative = 0;
             dateRange.forEach(date => {
-                const dailyTotal = setsData.reduce((sum, set) => sum + (date >= set.Start && date <= set.End ? set.DailyBudget : 0), 0);
+                const dailyTotal = setsData.reduce((sum, set) => sum + (date >= set.Start && date <= set.End && isWorkDay(date) ? set.dailyBurn : 0), 0);
                 cumulative += dailyTotal;
                 table += `<td>$${cumulative.toFixed(2)}</td>`;
             });
