@@ -63,6 +63,8 @@
             <table id="gantt-table" class="table table-bordered table-sm"></table>
         </div>
         
+        <button class="btn btn-info mt-3" onclick="downloadExcel()">Download Gantt Chart as Excel</button>
+        
         <button class="btn btn-secondary mt-3" onclick="exportToPDF()">Export to PDF</button>
     </div>
 
@@ -71,6 +73,7 @@
         let setCounter = 0;
         let resourceChart = null;
         let ganttChart = null;
+        let allData = { allDays: [], setEfforts: [], totalRequired: [], months: {} }; // To store data for Excel
 
         function addSet() {
             setCounter++;
@@ -197,8 +200,8 @@
                 }
 
                 sets.push({ name, start, end, budget, startStr, endStr });
-                minDate = Math.min(minDate, start);
-                maxDate = Math.max(maxDate, end);
+                minDate = new Date(Math.min(minDate, start));
+                maxDate = new Date(Math.max(maxDate, end));
             });
 
             if (sets.length === 0) {
@@ -288,7 +291,7 @@
                     if (req > 0) zeroAllocation = false;
                 });
 
-                setEfforts.push({ name: s.name, efforts: setEffort, color: colors[setIdx % colors.length], start: s.start, end: s.end });
+                setEfforts.push({ name: s.name, efforts: setEffort, color: colors[setIdx % colors.length], start: s.startStr, end: s.endStr });
                 allWarnings.push(...setWarnings);
             });
 
@@ -324,7 +327,7 @@
                 data: {
                     datasets: setEfforts.map((se, i) => ({
                         label: se.name,
-                        data: [{ y: se.name, x: [new Date(se.start), new Date(se.end)] }],
+                        data: [{ y: se.name, x: [se.start, se.end] }],
                         backgroundColor: se.color
                     }))
                 },
@@ -349,7 +352,7 @@
                                 label: (context) => {
                                     const se = setEfforts[context.datasetIndex];
                                     const avgPeople = (se.efforts.reduce((a, b) => a + b, 0) / se.efforts.filter(p => p > 0).length) || 0;
-                                    return `${context.dataset.label}: From ${se.startStr} to ${se.endStr}, Avg People: ${avgPeople.toFixed(2)}`;
+                                    return `${context.dataset.label}: From ${se.start} to ${se.end}, Avg People: ${avgPeople.toFixed(2)}`;
                                 }
                             }
                         }
@@ -472,6 +475,62 @@
                 totalTr.appendChild(td);
             });
             table.appendChild(totalTr);
+
+            // Store data for Excel
+            allData.allDays = allDays;
+            allData.setEfforts = setEfforts;
+            allData.totalRequired = totalRequired;
+            allData.months = months;
+        }
+
+        function downloadExcel() {
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.aoa_to_sheet([]);
+
+            // Add headers
+            let row = 1;
+            XLSX.utils.sheet_add_aoa(ws, [["Set"]], { origin: `A${row}` });
+            let col = 2;
+            Object.keys(allData.months).forEach(month => {
+                XLSX.utils.sheet_add_aoa(ws, [[month]], { origin: XLSX.utils.encode_cell({ r: row - 1, c: col - 1 }), cellStyles: true });
+                ws[XLSX.utils.encode_cell({ r: row - 1, c: col - 1 })].s = { fill: { fgColor: { rgb: "F0F0F0" } }, font: { bold: true } };
+                ws['!merges'] = ws['!merges'] || [];
+                ws['!merges'].push({ s: { r: row - 1, c: col - 1 }, e: { r: row - 1, c: col + allData.months[month].length - 2 } });
+                allData.months[month].forEach(({day, weekDay}) => {
+                    XLSX.utils.sheet_add_aoa(ws, [[`${day} (${weekDay})`]], { origin: XLSX.utils.encode_cell({ r: row, c: col - 1 }) });
+                    col++;
+                });
+            });
+
+            row = 2;
+            allData.setEfforts.forEach(se => {
+                XLSX.utils.sheet_add_aoa(ws, [[se.name]], { origin: `A${row + 1}` });
+                allData.allDays.forEach((day, idx) => {
+                    const people = se.efforts[idx];
+                    if (people > 0) {
+                        const cell = XLSX.utils.encode_cell({ r: row, c: idx + 1 });
+                        ws[cell] = { v: Math.ceil(people), t: 'n' };
+                        ws[cell].s = { fill: { fgColor: { rgb: se.color.replace('#', '') } }, font: { color: { rgb: "FFFFFF" }, bold: true } };
+                    }
+                });
+                row++;
+            });
+
+            // Total row
+            XLSX.utils.sheet_add_aoa(ws, [["Total People"]], { origin: `A${row + 1}` });
+            allData.allDays.forEach((day, idx) => {
+                const total = Math.ceil(allData.totalRequired[idx]);
+                const cell = XLSX.utils.encode_cell({ r: row, c: idx + 1 });
+                ws[cell] = { v: total, t: 'n' };
+                if (total > crewSize) {
+                    ws[cell].s = { fill: { fgColor: { rgb: "FFCCCC" } }, font: { color: { rgb: "FF0000" }, bold: true } };
+                } else {
+                    ws[cell].s = { font: { bold: true } };
+                }
+            });
+
+            XLSX.utils.book_append_sheet(wb, ws, "Gantt Chart");
+            XLSX.writeFile(wb, 'gantt_chart.xlsx');
         }
 
         function exportToPDF() {
