@@ -6,15 +6,19 @@
     <title>Movie Set Budgeting Tool</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
     <style>
         body { padding: 20px; }
         .set-card { margin-bottom: 20px; }
-        #chart-container { margin-top: 20px; }
+        #chart-container { margin-top: 20px; overflow-x: auto; }
         #analysis { margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #f8f9fa; }
-        .weekend-input { margin-top: 10px; }
+        #gantt-table th, #gantt-table td { text-align: center; vertical-align: middle; }
+        #gantt-table .month-header { background-color: #f0f0f0; }
+        #gantt-table .day-header { background-color: #e0e0e0; }
+        #gantt-table .set-cell { color: white; font-weight: bold; }
+        #gantt-table .total-row { font-weight: bold; }
+        #gantt-table .over-crew { background-color: #ffcccc; }
     </style>
 </head>
 <body>
@@ -40,7 +44,7 @@
         <div id="analysis"></div>
         
         <div id="chart-container">
-            <canvas id="resource-gantt-chart"></canvas>
+            <table id="gantt-table" class="table table-bordered table-sm"></table>
         </div>
         
         <button class="btn btn-secondary mt-3" onclick="exportToPDF()">Export to PDF</button>
@@ -48,7 +52,6 @@
 
     <script>
         let crewSize = 0;
-        let chart = null;
         let setCounter = 0;
 
         function addSet() {
@@ -79,12 +82,9 @@
                         <label for="set-end-${setCounter}" class="form-label">End Date:</label>
                         <input type="date" class="form-control" id="set-end-${setCounter}" required>
                     </div>
+                    <div id="weekend-inputs-${setCounter}" class="weekend-input"></div>
                 </div>
             `;
-            const weekendDiv = document.createElement('div');
-            weekendDiv.id = `weekend-inputs-${setCounter}`;
-            weekendDiv.className = 'weekend-input';
-            card.querySelector('.card-body').appendChild(weekendDiv);
             container.appendChild(card);
 
             const startInput = document.getElementById(`set-start-${setCounter}`);
@@ -117,8 +117,8 @@
                     div.className = 'mb-2';
                     div.innerHTML = `
                         <label>${d.date} (${d.type}):</label>
-                        <input type="number" id="hours-${setCounter}-${d.date}" min="0" step="0.5" placeholder="Hours" class="form-control d-inline-block w-auto me-2">
-                        <input type="number" id="people-${setCounter}-${d.date}" min="0" placeholder="Max People" class="form-control d-inline-block w-auto">
+                        <input type="number" id="hours-${setCounter}-${d.date.replace(/-/g, '-')}" min="0" step="0.5" placeholder="Hours" class="form-control d-inline-block w-auto me-2">
+                        <input type="number" id="people-${setCounter}-${d.date.replace(/-/g, '-')}" min="0" placeholder="Max People" class="form-control d-inline-block w-auto">
                     `;
                     weekendContainer.appendChild(div);
                 });
@@ -200,15 +200,17 @@
 
             const totalRequired = new Array(allDays.length).fill(0);
             const setEfforts = [];
+            const colors = ['#007bff', '#28a745', '#dc3545', '#ffc107', '#6f42c1', '#fd7e14']; // Example colors for sets
 
-            sets.forEach((s) => {
+            sets.forEach((s, setIdx) => {
                 const setWarnings = [];
-                const h = dailyCost / 11.5; // Base hourly rate from 11.5 hours
+                const h = dailyCost / 11.5; // Base hourly rate
                 const totalEquiv = s.budget / h;
 
                 const weekends = {};
-                const hourInputs = document.querySelectorAll(`input[id^="hours-${sets.indexOf(s) + 1}-"]`);
-                for (let input of hourInputs) {
+                const setCounterForThis = setIdx + 1; // since sets.indexOf(s) + 1
+                const hourInputs = document.querySelectorAll(`input[id^="hours-${setCounterForThis}-"]`);
+                hourInputs.forEach(input => {
                     const parts = input.id.split('-');
                     const date = `${parts[2]}-${parts[3]}-${parts[4]}`;
                     const hours = parseFloat(input.value) || 0;
@@ -218,9 +220,9 @@
                     const dayOfWeek = d.getDay();
                     const mult = dayOfWeek === 6 ? 1.5 : dayOfWeek === 0 ? 2 : null;
                     if (mult && hours > 0) {
-                        weekends[date] = { hours, mult, maxPeople };
+                        weekends[date] = {hours, mult, maxPeople};
                     }
-                }
+                });
 
                 const setStartDate = new Date(s.start);
                 const setEndDate = new Date(s.end);
@@ -238,38 +240,34 @@
                 }
 
                 if (workingDays.length === 0) {
-                    alert(`No working days for set ${s.name}.`);
+                    setWarnings.push(`No working days for set ${s.name}.`);
                     return;
                 }
 
                 const numWorking = workingDays.length;
                 const mu = (numWorking - 1) / 2;
                 const sigma = numWorking / 6 || 0.1;
-                const pdf = [];
-                for (let i = 0; i < numWorking; i++) {
-                    const x = i;
-                    pdf.push(Math.exp(-0.5 * Math.pow((x - mu) / sigma, 2)) / (sigma * Math.sqrt(2 * Math.PI)));
-                }
+                const pdf = workingDays.map((_, i) => Math.exp(-0.5 * Math.pow((i - mu) / sigma, 2)) / (sigma * Math.sqrt(2 * Math.PI)));
                 const pdfSum = pdf.reduce((a, b) => a + b, 0);
                 const allocatedEquiv = pdf.map(p => (p / pdfSum) * totalEquiv);
 
                 const setEffort = new Array(allDays.length).fill(0);
                 workingDays.forEach((day, i) => {
                     const idx = dayIndex[day];
-                    let equivPer = 11.5; // Default to 11.5 hours
+                    let equivPer = 11.5; // Default weekday
                     const isWeekend = weekends[day];
                     if (isWeekend) {
                         equivPer = isWeekend.hours * isWeekend.mult;
                     }
-                    const req = allocatedEquiv[i] / equivPer;
-                    setEffort[idx] = Math.min(req, isWeekend ? isWeekend.maxPeople : crewSize);
-
+                    let req = allocatedEquiv[i] / equivPer;
                     if (isWeekend && req > isWeekend.maxPeople) {
-                        setWarnings.push(`On ${day} for set ${s.name}, required ${req.toFixed(2)} > allocated ${isWeekend.maxPeople} people.`);
+                        setWarnings.push(`On ${day} for set ${s.name}, required ${req.toFixed(2)} > allocated ${isWeekend.maxPeople} people. Adjusted to ${isWeekend.maxPeople}.`);
+                        req = isWeekend.maxPeople;
                     }
+                    setEffort[idx] = req;
                 });
 
-                setEfforts.push({ name: s.name, efforts: setEffort });
+                setEfforts.push({ name: s.name, efforts: setEffort, color: colors[setIdx % colors.length] });
                 allWarnings.push(...setWarnings);
             });
 
@@ -279,6 +277,7 @@
                 });
             });
 
+            // Analysis
             const peakRequired = Math.max(...totalRequired);
             let analysisText = `Loaded ${crewSize} crew members.<br>`;
             if (peakRequired > crewSize) {
@@ -293,64 +292,86 @@
             }
             document.getElementById('analysis').innerHTML = analysisText;
 
-            const ctx = document.getElementById('resource-gantt-chart').getContext('2d');
-            if (chart) chart.destroy();
-            chart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: allDays,
-                    datasets: setEfforts.map((se, i) => ({
-                        label: se.name,
-                        data: se.efforts.map((eff, idx) => ({ x: allDays[idx], y: eff })),
-                        backgroundColor: `hsl(${i * 360 / setEfforts.length}, 70%, 50%)`,
-                        stack: 'people',
-                        barPercentage: 0.9,
-                        categoryPercentage: 0.8
-                    })).concat([{
-                        type: 'line',
-                        label: 'Available Crew',
-                        data: allDays.map(() => crewSize),
-                        borderColor: 'green',
-                        borderDash: [5, 5],
-                        fill: false,
-                        stack: null
-                    }])
-                },
-                options: {
-                    scales: {
-                        x: {
-                            title: { display: true, text: 'Dates' },
-                            type: 'time',
-                            time: { unit: 'day' },
-                            stacked: true,
-                            grid: { lineWidth: 2, color: '#ddd' },
-                            ticks: { source: 'data' }
-                        },
-                        y: {
-                            title: { display: true, text: 'People' },
-                            stacked: true,
-                            beginAtZero: true,
-                            ticks: { stepSize: 1 }
-                        }
-                    },
-                    plugins: {
-                        legend: { display: true },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return `${context.dataset.label}: ${context.raw.y.toFixed(2)} people`;
-                                }
-                            }
-                        }
-                    },
-                    barThickness: 'flex'
-                }
+            // Generate table-based Gantt chart
+            const table = document.getElementById('gantt-table');
+            table.innerHTML = '';
+
+            // Group days by month
+            const months = {};
+            allDays.forEach(day => {
+                const date = new Date(day);
+                const monthKey = `${date.toLocaleString('default', { month: 'long' })} ${date.getFullYear()}`;
+                if (!months[monthKey]) months[monthKey] = [];
+                months[monthKey].push({ day: date.getDate(), dateStr: day });
             });
+
+            // Header: Months
+            const monthTr = document.createElement('tr');
+            const activityTh = document.createElement('th');
+            activityTh.textContent = 'Set';
+            monthTr.appendChild(activityTh);
+            Object.keys(months).forEach(month => {
+                const th = document.createElement('th');
+                th.className = 'month-header';
+                th.colSpan = months[month].length;
+                th.textContent = month;
+                monthTr.appendChild(th);
+            });
+            table.appendChild(monthTr);
+
+            // Header: Days
+            const dayTr = document.createElement('tr');
+            const emptyTh = document.createElement('th');
+            dayTr.appendChild(emptyTh);
+            Object.values(months).flat().forEach(({day}) => {
+                const th = document.createElement('th');
+                th.className = 'day-header';
+                th.textContent = day;
+                dayTr.appendChild(th);
+            });
+            table.appendChild(dayTr);
+
+            // Body: Sets
+            setEfforts.forEach(se => {
+                const tr = document.createElement('tr');
+                const nameTd = document.createElement('td');
+                nameTd.textContent = se.name;
+                tr.appendChild(nameTd);
+                allDays.forEach((day, idx) => {
+                    const td = document.createElement('td');
+                    const people = se.efforts[idx];
+                    if (people > 0) {
+                        td.style.backgroundColor = se.color;
+                        td.className = 'set-cell';
+                        td.textContent = Math.round(people);
+                    }
+                    tr.appendChild(td);
+                });
+                table.appendChild(tr);
+            });
+
+            // Total row
+            const totalTr = document.createElement('tr');
+            const totalTd = document.createElement('td');
+            totalTd.textContent = 'Total People';
+            totalTd.className = 'total-row';
+            totalTr.appendChild(totalTd);
+            allDays.forEach((day, idx) => {
+                const td = document.createElement('td');
+                const total = Math.round(totalRequired[idx]);
+                td.textContent = total;
+                td.className = 'total-row';
+                if (total > crewSize) {
+                    td.classList.add('over-crew');
+                }
+                totalTr.appendChild(td);
+            });
+            table.appendChild(totalTr);
         }
 
         function exportToPDF() {
             const { jsPDF } = window.jspdf;
-            const pdf = new jsPDF();
+            const pdf = new jsPDF({ orientation: 'landscape' });
             const analysis = document.getElementById('analysis');
             const chartContainer = document.getElementById('chart-container');
 
@@ -360,11 +381,12 @@
                 return html2canvas(chartContainer);
             }).then(canvas => {
                 const imgData = canvas.toDataURL('image/png');
-                pdf.addImage(imgData, 'PNG', 10, 50, 180, 120);
+                pdf.addImage(imgData, 'PNG', 10, 50, 260, 120); // Larger for landscape
                 pdf.save('sets_gantt.pdf');
             });
         }
 
+        // Initialize with one set
         addSet();
     </script>
 </body>
