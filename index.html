@@ -14,6 +14,7 @@
         .set-card { margin-bottom: 20px; }
         #chart-container { margin-top: 20px; }
         #analysis { margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #f8f9fa; }
+        .weekend-input { margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -26,7 +27,7 @@
         </div>
         
         <div class="mb-3">
-            <label for="daily-cost" class="form-label">Daily Cost per Person ($):</label>
+            <label for="daily-cost" class="form-label">Daily Cost per Person ($ for 11.5 hrs: 8 straight, 3.5 OT):</label>
             <input type="number" class="form-control" id="daily-cost" min="0" step="0.01" required>
         </div>
         
@@ -71,24 +72,59 @@
                         <input type="number" class="form-control" id="set-budget-${setCounter}" min="0" step="0.01" required>
                     </div>
                     <div class="mb-3">
-                        <label for="set-start-${setCounter}" class="form-label">Start Day:</label>
-                        <input type="number" class="form-control" id="set-start-${setCounter}" min="1" required>
+                        <label for="set-start-${setCounter}" class="form-label">Start Date:</label>
+                        <input type="date" class="form-control" id="set-start-${setCounter}" required>
                     </div>
                     <div class="mb-3">
-                        <label for="set-end-${setCounter}" class="form-label">End Day:</label>
-                        <input type="number" class="form-control" id="set-end-${setCounter}" min="1" required>
-                    </div>
-                    <div class="form-check mb-3">
-                        <input type="checkbox" class="form-check-input" id="set-weekend-${setCounter}">
-                        <label class="form-check-label" for="set-weekend-${setCounter}">Weekend Work (Adjust rate to (daily / 13.25) * 15)</label>
-                    </div>
-                    <div class="form-check mb-3">
-                        <input type="checkbox" class="form-check-input" id="set-sunday-${setCounter}">
-                        <label class="form-check-label" for="set-sunday-${setCounter}">Sunday Work (Adjust rate to (daily / 13.25) * 16)</label>
+                        <label for="set-end-${setCounter}" class="form-label">End Date:</label>
+                        <input type="date" class="form-control" id="set-end-${setCounter}" required>
                     </div>
                 </div>
             `;
+            const weekendDiv = document.createElement('div');
+            weekendDiv.id = `weekend-inputs-${setCounter}`;
+            weekendDiv.className = 'weekend-input';
+            card.querySelector('.card-body').appendChild(weekendDiv);
             container.appendChild(card);
+
+            const startInput = document.getElementById(`set-start-${setCounter}`);
+            const endInput = document.getElementById(`set-end-${setCounter}`);
+
+            function updateWeekendInputs() {
+                const startStr = startInput.value;
+                const endStr = endInput.value;
+                if (!startStr || !endStr) return;
+                const start = new Date(startStr);
+                const end = new Date(endStr);
+                if (end < start) return;
+                const satsuns = [];
+                let curr = new Date(start);
+                while (curr <= end) {
+                    const day = curr.getDay();
+                    if (day === 6 || day === 0) {
+                        satsuns.push({
+                            date: curr.toISOString().split('T')[0],
+                            type: day === 6 ? 'Saturday' : 'Sunday',
+                            mult: day === 6 ? 1.5 : 2
+                        });
+                    }
+                    curr.setDate(curr.getDate() + 1);
+                }
+                const weekendContainer = document.getElementById(`weekend-inputs-${setCounter}`);
+                weekendContainer.innerHTML = '<h5>Weekend Days Inputs</h5>';
+                satsuns.forEach((d) => {
+                    const div = document.createElement('div');
+                    div.className = 'mb-2';
+                    div.innerHTML = `
+                        <label>${d.date} (${d.type}):</label>
+                        <input type="number" id="hours-${setCounter}-${d.date}" min="0" step="0.5" placeholder="Hours" class="form-control d-inline-block w-auto me-2">
+                        <input type="number" id="people-${setCounter}-${d.date}" min="0" placeholder="Max People" class="form-control d-inline-block w-auto">
+                    `;
+                    weekendContainer.appendChild(div);
+                });
+            }
+            startInput.addEventListener('change', updateWeekendInputs);
+            endInput.addEventListener('change', updateWeekendInputs);
         }
 
         function removeSet(id) {
@@ -105,7 +141,7 @@
                     const sheetName = workbook.SheetNames[0];
                     const sheet = workbook.Sheets[sheetName];
                     const json = XLSX.utils.sheet_to_json(sheet);
-                    resolve(json.length); // Assume rows are crew members
+                    resolve(json.length);
                 };
                 reader.onerror = reject;
                 reader.readAsBinaryString(file);
@@ -124,29 +160,27 @@
             const dailyCost = parseFloat(document.getElementById('daily-cost').value);
             const setCards = document.querySelectorAll('.set-card');
             const sets = [];
-            let minDay = Infinity;
-            let maxDay = -Infinity;
+            let minDate = new Date(Infinity);
+            let maxDate = new Date(-Infinity);
+            const allWarnings = [];
 
-            setCards.forEach((card, index) => {
+            setCards.forEach((card) => {
                 const i = card.id.split('-')[1];
                 const name = document.getElementById(`set-name-${i}`).value;
                 const budget = parseFloat(document.getElementById(`set-budget-${i}`).value);
-                const start = parseInt(document.getElementById(`set-start-${i}`).value);
-                const end = parseInt(document.getElementById(`set-end-${i}`).value);
-                const weekend = document.getElementById(`set-weekend-${i}`).checked;
-                const sunday = document.getElementById(`set-sunday-${i}`).checked;
+                const startStr = document.getElementById(`set-start-${i}`).value;
+                const endStr = document.getElementById(`set-end-${i}`).value;
+                const start = new Date(startStr);
+                const end = new Date(endStr);
 
-                let adjustedDaily = dailyCost;
-                if (sunday) {
-                    adjustedDaily = (dailyCost / 13.25) * 16;
-                } else if (weekend) {
-                    adjustedDaily = (dailyCost / 13.25) * 15;
+                if (end < start) {
+                    alert(`End date must be after start date for set ${name}.`);
+                    return;
                 }
 
-                const manDays = budget / adjustedDaily;
-                sets.push({ name, start, end, manDays });
-                minDay = Math.min(minDay, start);
-                maxDay = Math.max(maxDay, end);
+                sets.push({ name, start, end, budget, startStr, endStr });
+                minDate = new Date(Math.min(minDate, start));
+                maxDate = new Date(Math.max(maxDate, end));
             });
 
             if (sets.length === 0) {
@@ -154,36 +188,111 @@
                 return;
             }
 
-            const allDays = Array.from({ length: maxDay - minDay + 1 }, (_, i) => minDay + i);
-            const totalRequired = new Array(allDays.length).fill(0);
-            const setEfforts = sets.map(s => ({ name: s.name, efforts: new Array(allDays.length).fill(0) }));
+            const allDays = [];
+            let current = new Date(minDate);
+            while (current <= maxDate) {
+                allDays.push(current.toISOString().split('T')[0]);
+                current.setDate(current.getDate() + 1);
+            }
 
-            sets.forEach((s, setIdx) => {
-                const setDays = Array.from({ length: s.end - s.start + 1 }, (_, i) => s.start + i);
-                if (setDays.length === 0) return;
-                const mu = (s.start + s.end) / 2;
-                const sigma = (s.end - s.start + 1) / 6 || 0.1;
-                const pdf = setDays.map(d => Math.exp(-0.5 * Math.pow((d - mu) / sigma, 2)) / (sigma * Math.sqrt(2 * Math.PI)));
+            const dayIndex = {};
+            allDays.forEach((day, idx) => dayIndex[day] = idx);
+
+            const totalRequired = new Array(allDays.length).fill(0);
+            const setEfforts = [];
+
+            sets.forEach((s) => {
+                const setWarnings = [];
+                const h = dailyCost / 11.5; // Base hourly rate from 11.5 hours
+                const totalEquiv = s.budget / h;
+
+                const weekends = {};
+                const hourInputs = document.querySelectorAll(`input[id^="hours-${sets.indexOf(s) + 1}-"]`);
+                for (let input of hourInputs) {
+                    const parts = input.id.split('-');
+                    const date = `${parts[2]}-${parts[3]}-${parts[4]}`;
+                    const hours = parseFloat(input.value) || 0;
+                    const peopleId = `people-${parts[1]}-${parts[2]}-${parts[3]}-${parts[4]}`;
+                    const maxPeople = parseInt(document.getElementById(peopleId).value) || 0;
+                    const d = new Date(date);
+                    const dayOfWeek = d.getDay();
+                    const mult = dayOfWeek === 6 ? 1.5 : dayOfWeek === 0 ? 2 : null;
+                    if (mult && hours > 0) {
+                        weekends[date] = { hours, mult, maxPeople };
+                    }
+                }
+
+                const setStartDate = new Date(s.start);
+                const setEndDate = new Date(s.end);
+                const workingDays = [];
+                let currDay = new Date(setStartDate);
+                while (currDay <= setEndDate) {
+                    const dayStr = currDay.toISOString().split('T')[0];
+                    const dow = currDay.getDay();
+                    if (dow !== 0 && dow !== 6) {
+                        workingDays.push(dayStr);
+                    } else if (weekends[dayStr]) {
+                        workingDays.push(dayStr);
+                    }
+                    currDay.setDate(currDay.getDate() + 1);
+                }
+
+                if (workingDays.length === 0) {
+                    alert(`No working days for set ${s.name}.`);
+                    return;
+                }
+
+                const numWorking = workingDays.length;
+                const mu = (numWorking - 1) / 2;
+                const sigma = numWorking / 6 || 0.1;
+                const pdf = [];
+                for (let i = 0; i < numWorking; i++) {
+                    const x = i;
+                    pdf.push(Math.exp(-0.5 * Math.pow((x - mu) / sigma, 2)) / (sigma * Math.sqrt(2 * Math.PI)));
+                }
                 const pdfSum = pdf.reduce((a, b) => a + b, 0);
-                const effortPerDay = pdf.map(p => (p / pdfSum) * s.manDays);
-                setDays.forEach((d, idx) => {
-                    const totalIdx = d - minDay;
-                    setEfforts[setIdx].efforts[totalIdx] = effortPerDay[idx];
-                    totalRequired[totalIdx] += effortPerDay[idx];
+                const allocatedEquiv = pdf.map(p => (p / pdfSum) * totalEquiv);
+
+                const setEffort = new Array(allDays.length).fill(0);
+                workingDays.forEach((day, i) => {
+                    const idx = dayIndex[day];
+                    let equivPer = 11.5; // Default to 11.5 hours
+                    const isWeekend = weekends[day];
+                    if (isWeekend) {
+                        equivPer = isWeekend.hours * isWeekend.mult;
+                    }
+                    const req = allocatedEquiv[i] / equivPer;
+                    setEffort[idx] = Math.min(req, isWeekend ? isWeekend.maxPeople : crewSize);
+
+                    if (isWeekend && req > isWeekend.maxPeople) {
+                        setWarnings.push(`On ${day} for set ${s.name}, required ${req.toFixed(2)} > allocated ${isWeekend.maxPeople} people.`);
+                    }
+                });
+
+                setEfforts.push({ name: s.name, efforts: setEffort });
+                allWarnings.push(...setWarnings);
+            });
+
+            setEfforts.forEach(se => {
+                se.efforts.forEach((eff, idx) => {
+                    totalRequired[idx] += eff;
                 });
             });
 
-            // Analysis
             const peakRequired = Math.max(...totalRequired);
-            let analysisText = `Loaded ${crewSize} crew members.<br>Your current crew of ${crewSize} is sufficient. Peak requirement is ${peakRequired.toFixed(2)}.<br>You are on budget overall.`;
+            let analysisText = `Loaded ${crewSize} crew members.<br>`;
             if (peakRequired > crewSize) {
                 const additionalNeeded = Math.ceil(peakRequired - crewSize);
-                analysisText = `Loaded ${crewSize} crew members.<br>Warning: Peak people required is ${peakRequired.toFixed(2)} on some days, but you only have ${crewSize} crew.<br>You need to hire at least ${additionalNeeded} more people (temporarily) to meet the schedule without delays.<br>You are on budget overall.`;
+                analysisText += `Warning: Peak people required is ${peakRequired.toFixed(2)} on some days, but you only have ${crewSize} crew.<br>You need to hire at least ${additionalNeeded} more people (temporarily) to meet the schedule without delays.<br>`;
+            } else {
+                analysisText += `Your current crew of ${crewSize} is sufficient. Peak requirement is ${peakRequired.toFixed(2)}.<br>`;
+            }
+            analysisText += `You are on budget overall.<br>`;
+            if (allWarnings.length > 0) {
+                analysisText += `<br>Additional Warnings:<br>${allWarnings.join('<br>')}`;
             }
             document.getElementById('analysis').innerHTML = analysisText;
 
-            // Resource Gantt Chart: Stacked bar per day, with sets as stacks, showing people per set per day
-            // This visualizes ramp-up/down (bell curve) and transitions between projects
             const ctx = document.getElementById('resource-gantt-chart').getContext('2d');
             if (chart) chart.destroy();
             chart = new Chart(ctx, {
@@ -192,13 +301,15 @@
                     labels: allDays,
                     datasets: setEfforts.map((se, i) => ({
                         label: se.name,
-                        data: se.efforts,
-                        backgroundColor: `hsl(${i * 360 / sets.length}, 70%, 50%)`,
-                        stack: 'people' // Stack them
+                        data: se.efforts.map((eff, idx) => ({ x: allDays[idx], y: eff })),
+                        backgroundColor: `hsl(${i * 360 / setEfforts.length}, 70%, 50%)`,
+                        stack: 'people',
+                        barPercentage: 0.9,
+                        categoryPercentage: 0.8
                     })).concat([{
                         type: 'line',
                         label: 'Available Crew',
-                        data: new Array(allDays.length).fill(crewSize),
+                        data: allDays.map(() => crewSize),
                         borderColor: 'green',
                         borderDash: [5, 5],
                         fill: false,
@@ -208,22 +319,31 @@
                 options: {
                     scales: {
                         x: {
-                            title: { display: true, text: 'Days' },
+                            title: { display: true, text: 'Dates' },
+                            type: 'time',
+                            time: { unit: 'day' },
                             stacked: true,
-                            grid: { lineWidth: 2, color: '#ddd' } // Thicker gridlines to separate days obviously
+                            grid: { lineWidth: 2, color: '#ddd' },
+                            ticks: { source: 'data' }
                         },
                         y: {
                             title: { display: true, text: 'People' },
                             stacked: true,
-                            beginAtZero: true
+                            beginAtZero: true,
+                            ticks: { stepSize: 1 }
                         }
                     },
                     plugins: {
-                        legend: { display: true }
+                        legend: { display: true },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `${context.dataset.label}: ${context.raw.y.toFixed(2)} people`;
+                                }
+                            }
+                        }
                     },
-                    barThickness: 'flex', // Adjust bar width
-                    categoryPercentage: 0.8, // Make bars wider to fill days
-                    barPercentage: 0.9
+                    barThickness: 'flex'
                 }
             });
         }
@@ -236,16 +356,15 @@
 
             html2canvas(analysis).then(canvas => {
                 const imgData = canvas.toDataURL('image/png');
-                pdf.addImage(imgData, 'PNG', 10, 10, 180, 30); // Adjust size as needed
+                pdf.addImage(imgData, 'PNG', 10, 10, 180, 30);
                 return html2canvas(chartContainer);
             }).then(canvas => {
                 const imgData = canvas.toDataURL('image/png');
-                pdf.addImage(imgData, 'PNG', 10, 50, 180, 120); // Adjust size as needed
+                pdf.addImage(imgData, 'PNG', 10, 50, 180, 120);
                 pdf.save('sets_gantt.pdf');
             });
         }
 
-        // Initialize with one set
         addSet();
     </script>
 </body>
