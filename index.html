@@ -202,6 +202,7 @@
             const totalRequired = new Array(allDays.length).fill(0);
             const setEfforts = [];
             const colors = ['#007bff', '#28a745', '#dc3545', '#ffc107', '#6f42c1', '#fd7e14', '#20c997', '#6610f2'];
+            let zeroAllocation = true;
 
             sets.forEach((s, setIdx) => {
                 const setWarnings = [];
@@ -242,7 +243,8 @@
 
                 if (workingDays.length === 0) {
                     setWarnings.push(`No working days for set ${s.name}.`);
-                    return;
+                    allWarnings.push(...setWarnings);
+                    return; // Skip this set
                 }
 
                 const numWorking = workingDays.length;
@@ -266,6 +268,7 @@
                         req = isWeekend.maxPeople;
                     }
                     setEffort[idx] = req;
+                    if (req > 0) zeroAllocation = false;
                 });
 
                 setEfforts.push({ name: s.name, efforts: setEffort, color: colors[setIdx % colors.length] });
@@ -277,6 +280,10 @@
                     totalRequired[idx] += eff;
                 });
             });
+
+            if (zeroAllocation) {
+                allWarnings.push('No people allocated to any days. Check your budget, daily cost, date range, and weekend inputs if applicable.');
+            }
 
             const peakRequired = Math.max(...totalRequired);
             let analysisText = `Loaded ${crewSize} crew members.<br>`;
@@ -338,7 +345,7 @@
                     if (people > 0) {
                         td.style.backgroundColor = se.color;
                         td.className = 'set-cell';
-                        td.textContent = Math.round(people);
+                        td.textContent = Math.ceil(people); // Use ceil to show at least 1 for small allocations
                     }
                     tr.appendChild(td);
                 });
@@ -352,7 +359,7 @@
             totalTr.appendChild(totalTd);
             allDays.forEach((day, idx) => {
                 const td = document.createElement('td');
-                const total = Math.round(totalRequired[idx]);
+                const total = Math.ceil(totalRequired[idx]);
                 td.textContent = total;
                 td.className = 'total-row';
                 if (total > crewSize) {
