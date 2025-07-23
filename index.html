@@ -13,12 +13,13 @@
         .set-card { margin-bottom: 20px; }
         #chart-container { margin-top: 20px; overflow-x: auto; }
         #analysis { margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #f8f9fa; }
-        #gantt-table th, #gantt-table td { text-align: center; vertical-align: middle; }
-        #gantt-table .month-header { background-color: #f0f0f0; }
+        #gantt-table th, #gantt-table td { text-align: center; vertical-align: middle; padding: 5px; border: 1px solid #ccc; }
+        #gantt-table .month-header { background-color: #f0f0f0; font-weight: bold; }
         #gantt-table .day-header { background-color: #e0e0e0; }
         #gantt-table .set-cell { color: white; font-weight: bold; }
-        #gantt-table .total-row { font-weight: bold; }
-        #gantt-table .over-crew { background-color: #ffcccc; }
+        #gantt-table .total-row { font-weight: bold; background-color: #f8f9fa; }
+        #gantt-table .over-crew { background-color: #ffcccc; color: red; }
+        #gantt-table tr:nth-child(even) { background-color: #f9f9f9; }
     </style>
 </head>
 <body>
@@ -117,8 +118,8 @@
                     div.className = 'mb-2';
                     div.innerHTML = `
                         <label>${d.date} (${d.type}):</label>
-                        <input type="number" id="hours-${setCounter}-${d.date.replace(/-/g, '-')}" min="0" step="0.5" placeholder="Hours" class="form-control d-inline-block w-auto me-2">
-                        <input type="number" id="people-${setCounter}-${d.date.replace(/-/g, '-')}" min="0" placeholder="Max People" class="form-control d-inline-block w-auto">
+                        <input type="number" id="hours-${setCounter}-${d.date}" min="0" step="0.5" placeholder="Hours" class="form-control d-inline-block w-auto me-2">
+                        <input type="number" id="people-${setCounter}-${d.date}" min="0" placeholder="Max People" class="form-control d-inline-block w-auto">
                     `;
                     weekendContainer.appendChild(div);
                 });
@@ -200,15 +201,15 @@
 
             const totalRequired = new Array(allDays.length).fill(0);
             const setEfforts = [];
-            const colors = ['#007bff', '#28a745', '#dc3545', '#ffc107', '#6f42c1', '#fd7e14']; // Example colors for sets
+            const colors = ['#007bff', '#28a745', '#dc3545', '#ffc107', '#6f42c1', '#fd7e14', '#20c997', '#6610f2'];
 
             sets.forEach((s, setIdx) => {
                 const setWarnings = [];
-                const h = dailyCost / 11.5; // Base hourly rate
+                const h = dailyCost / 11.5;
                 const totalEquiv = s.budget / h;
 
                 const weekends = {};
-                const setCounterForThis = setIdx + 1; // since sets.indexOf(s) + 1
+                const setCounterForThis = setIdx + 1;
                 const hourInputs = document.querySelectorAll(`input[id^="hours-${setCounterForThis}-"]`);
                 hourInputs.forEach(input => {
                     const parts = input.id.split('-');
@@ -254,7 +255,7 @@
                 const setEffort = new Array(allDays.length).fill(0);
                 workingDays.forEach((day, i) => {
                     const idx = dayIndex[day];
-                    let equivPer = 11.5; // Default weekday
+                    let equivPer = 11.5;
                     const isWeekend = weekends[day];
                     if (isWeekend) {
                         equivPer = isWeekend.hours * isWeekend.mult;
@@ -277,7 +278,6 @@
                 });
             });
 
-            // Analysis
             const peakRequired = Math.max(...totalRequired);
             let analysisText = `Loaded ${crewSize} crew members.<br>`;
             if (peakRequired > crewSize) {
@@ -292,20 +292,17 @@
             }
             document.getElementById('analysis').innerHTML = analysisText;
 
-            // Generate table-based Gantt chart
             const table = document.getElementById('gantt-table');
             table.innerHTML = '';
 
-            // Group days by month
             const months = {};
             allDays.forEach(day => {
                 const date = new Date(day);
                 const monthKey = `${date.toLocaleString('default', { month: 'long' })} ${date.getFullYear()}`;
                 if (!months[monthKey]) months[monthKey] = [];
-                months[monthKey].push({ day: date.getDate(), dateStr: day });
+                months[monthKey].push({ day: date.getDate(), dateStr: day, weekDay: date.toLocaleString('default', { weekday: 'short' }) });
             });
 
-            // Header: Months
             const monthTr = document.createElement('tr');
             const activityTh = document.createElement('th');
             activityTh.textContent = 'Set';
@@ -319,19 +316,17 @@
             });
             table.appendChild(monthTr);
 
-            // Header: Days
             const dayTr = document.createElement('tr');
             const emptyTh = document.createElement('th');
             dayTr.appendChild(emptyTh);
-            Object.values(months).flat().forEach(({day}) => {
+            Object.values(months).flat().forEach(({day, weekDay}) => {
                 const th = document.createElement('th');
                 th.className = 'day-header';
-                th.textContent = day;
+                th.innerHTML = `${day}<br><small>${weekDay}</small>`;
                 dayTr.appendChild(th);
             });
             table.appendChild(dayTr);
 
-            // Body: Sets
             setEfforts.forEach(se => {
                 const tr = document.createElement('tr');
                 const nameTd = document.createElement('td');
@@ -350,7 +345,6 @@
                 table.appendChild(tr);
             });
 
-            // Total row
             const totalTr = document.createElement('tr');
             const totalTd = document.createElement('td');
             totalTd.textContent = 'Total People';
@@ -381,12 +375,11 @@
                 return html2canvas(chartContainer);
             }).then(canvas => {
                 const imgData = canvas.toDataURL('image/png');
-                pdf.addImage(imgData, 'PNG', 10, 50, 260, 120); // Larger for landscape
+                pdf.addImage(imgData, 'PNG', 10, 50, 260, 120);
                 pdf.save('sets_gantt.pdf');
             });
         }
 
-        // Initialize with one set
         addSet();
     </script>
 </body>
