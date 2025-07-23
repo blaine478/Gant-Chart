@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Movie Set Budgeting Tool</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #chart-container { width: 100%; max-width: 1200px; margin: 20px 0; }
+        #analysis { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+        button { padding: 10px; margin: 10px 0; }
+        input, label { display: block; margin: 5px 0; }
+        .set-input { border: 1px solid #eee; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Movie Set Budgeting Tool</h1>
+    
+    <label for="crew-file">Upload Crew XLS File:</label>
+    <input type="file" id="crew-file" accept=".xlsx, .xls">
+    
+    <label for="daily-cost">Daily Cost per Person ($):</label>
+    <input type="number" id="daily-cost" min="0" step="0.01" required>
+    
+    <label for="num-sets">Number of Sets:</label>
+    <input type="number" id="num-sets" min="1" required>
+    <button onclick="generateSetInputs()">Generate Set Inputs</button>
+    
+    <div id="sets-container"></div>
+    
+    <button onclick="processData()">Generate Chart and Analysis</button>
+    
+    <div id="analysis"></div>
+    
+    <div id="chart-container">
+        <canvas id="gantt-chart"></canvas>
+    </div>
+    
+    <button onclick="exportToPDF()">Export to PDF</button>
+
+    <script>
+        let crewSize = 0;
+        let chart = null;
+
+        function generateSetInputs() {
+            const numSets = parseInt(document.getElementById('num-sets').value);
+            const container = document.getElementById('sets-container');
+            container.innerHTML = '';
+            for (let i = 1; i <= numSets; i++) {
+                const div = document.createElement('div');
+                div.className = 'set-input';
+                div.innerHTML = `
+                    <h3>Set ${i}</h3>
+                    <label>Name:</label>
+                    <input type="text" id="set-name-${i}" required>
+                    <label>Labor Budget ($):</label>
+                    <input type="number" id="set-budget-${i}" min="0" step="0.01" required>
+                    <label>Start Day:</label>
+                    <input type="number" id="set-start-${i}" min="1" required>
+                    <label>End Day:</label>
+                    <input type="number" id="set-end-${i}" min="1" required>
+                `;
+                container.appendChild(div);
+            }
+        }
+
+        function readExcel(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const data = e.target.result;
+                    const workbook = XLSX.read(data, { type: 'binary' });
+                    const sheetName = workbook.SheetNames[0];
+                    const sheet = workbook.Sheets[sheetName];
+                    const json = XLSX.utils.sheet_to_json(sheet);
+                    resolve(json.length); // Assume rows are crew members
+                };
+                reader.onerror = reject;
+                reader.readAsBinaryString(file);
+            });
+        }
+
+        async function processData() {
+            const fileInput = document.getElementById('crew-file');
+            if (fileInput.files.length > 0) {
+                crewSize = await readExcel(fileInput.files[0]);
+            } else {
+                alert('Please upload a crew XLS file.');
+                return;
+            }
+
+            const dailyCost = parseFloat(document.getElementById('daily-cost').value);
+            const numSets = parseInt(document.getElementById('num-sets').value);
+            const sets = [];
+
+            let minDay = Infinity;
+            let maxDay = -Infinity;
+
+            for (let i = 1; i <= numSets; i++) {
+                const name = document.getElementById(`set-name-${i}`).value;
+                const budget = parseFloat(document.getElementById(`set-budget-${i}`).value);
+                const start = parseInt(document.getElementById(`set-start-${i}`).value);
+                const end = parseInt(document.getElementById(`set-end-${i}`).value);
+                const manDays = budget / dailyCost;
+                sets.push({ name, start, end, manDays });
+                minDay = Math.min(minDay, start);
+                maxDay = Math.max(maxDay, end);
+            }
+
+            const allDays = Array.from({ length: maxDay - minDay + 1 }, (_, i) => minDay + i);
+            const totalRequired = new Array(allDays.length).fill(0);
+
+            sets.forEach(s => {
+                const setDays = Array.from({ length: s.end - s.start + 1 }, (_, i) => s.start + i);
+                if (setDays.length === 0) return;
+                const mu = (s.start + s.end) / 2;
+                const sigma = (s.end - s.start + 1) / 6;
+                const pdf = setDays.map(d => Math.exp(-0.5 * Math.pow((d - mu) / sigma, 2)) / (sigma * Math.sqrt(2 * Math.PI)));
+                const pdfSum = pdf.reduce((a, b) => a + b, 0);
+                const effortPerDay = pdf.map(p => (p / pdfSum) * s.manDays);
+                setDays.forEach((d, idx) => {
+                    const totalIdx = d - minDay;
+                    totalRequired[totalIdx] += effortPerDay[idx];
+                });
+            });
+
+            // Analysis
+            const peakRequired = Math.max(...totalRequired);
+            let analysisText = `Your current crew of ${crewSize} is sufficient. Peak requirement is ${peakRequired.toFixed(2)}. You are on budget overall.`;
+            if (peakRequired > crewSize) {
+                const additionalNeeded = Math.ceil(peakRequired - crewSize);
+                analysisText = `Warning: Peak people required is ${peakRequired.toFixed(2)} on some days, but you only have ${crewSize} crew. You need to hire at least ${additionalNeeded} more people (temporarily) to meet the schedule without delays. You are on budget overall.`;
+            }
+            document.getElementById('analysis').innerText = analysisText;
+
+            // Chart
+            const ctx = document.getElementById('gantt-chart').getContext('2d');
+            if (chart) chart.destroy();
+
+            const ganttData = {
+                labels: sets.map(s => s.name),
+                datasets: sets.map((s, i) => ({
+                    label: s.name,
+                    data: [{ x: [s.start, s.end], y: s.name }],
+                    backgroundColor: `hsl(${i * 360 / sets.length}, 70%, 50%)`,
+                    borderColor: '#000',
+                    borderWidth: 1
+                }))
+            };
+
+            const resourceData = {
+                labels: allDays,
+                datasets: [
+                    { type: 'line', label: 'Required People', data: totalRequired, borderColor: 'red', fill: false },
+                    { type: 'line', label: 'Available Crew', data: new Array(allDays.length).fill(crewSize), borderColor: 'green', borderDash: [5, 5], fill: false }
+                ]
+            };
+
+            chart = new Chart(ctx, {
+                type: 'bar',
+                data: ganttData,
+                options: {
+                    indexAxis: 'y',
+                    scales: {
+                        x: { title: { display: true, text: 'Days' }, min: minDay - 1, max: maxDay + 1 },
+                        y: { title: { display: true, text: 'Sets' } }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+
+            // Overlay resource on same chart isn't direct in Chart.js; use mixed types
+            // For simplicity, add resource datasets to the same chart, but since indexAxis y, it's tricky.
+            // Alternative: Use two canvases or separate chart for resources. For now, create separate resource chart below.
+
+            // Actually, to overlay, we can use a second dataset with different type, but with y-indexed, line needs custom handling.
+            // Simplify: Make Gantt as horizontal bar, and add line datasets with secondary x-axis or approx.
+            // Better: Use scatter for lines, but to keep simple, I'll create a separate line chart below the Gantt.
+
+            // Add a second canvas for resource
+            let resourceCanvas = document.getElementById('resource-chart');
+            if (!resourceCanvas) {
+                resourceCanvas = document.createElement('canvas');
+                resourceCanvas.id = 'resource-chart';
+                document.getElementById('chart-container').appendChild(resourceCanvas);
+            }
+            const resourceCtx = resourceCanvas.getContext('2d');
+            let resourceChart = new Chart(resourceCtx, {
+                type: 'line',
+                data: resourceData,
+                options: {
+                    scales: {
+                        x: { title: { display: true, text: 'Days' } },
+                        y: { title: { display: true, text: 'People' } }
+                    }
+                }
+            });
+        }
+
+        function exportToPDF() {
+            const { jsPDF } = window.jspdf;
+            const pdf = new jsPDF();
+            const chartContainer = document.getElementById('chart-container');
+            const analysis = document.getElementById('analysis');
+
+            html2canvas(analysis).then(canvas => {
+                const imgData = canvas.toDataURL('image/png');
+                pdf.addImage(imgData, 'PNG', 10, 10, 180, 20); // Adjust size
+            }).then(() => {
+                return html2canvas(chartContainer);
+            }).then(canvas => {
+                const imgData = canvas.toDataURL('image/png');
+                pdf.addImage(imgData, 'PNG', 10, 40, 180, 100); // Adjust size
+                pdf.save('sets_gantt.pdf');
+            });
+        }
+    </script>
+</body>
+</html>
